@@ -15,6 +15,13 @@ from decimal import *
 import numpy as np
 from collections import deque
 
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
 class node(object):
     def __init__(self,index,word,weight,neighbour):
         self.index=index
@@ -22,7 +29,7 @@ class node(object):
         self.weight=weight
         self.neighbour=neighbour
 
-getcontext().prec = 100
+getcontext().prec = 400
 
 def find_connected_components(Nodes):
     visited = set()
@@ -261,7 +268,9 @@ def generate_next_token(input_ids,current_max,current_num,secret_num):
 
     if args.num_samples==0:
         word_prob = F.softmax(filtered_logits, dim=-1)
-        next_token_id = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
+        setup_seed(args.seed)
+        next_token_id = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=args.num_samples)
+        setup_seed(args.seed)
         add_prob = math.log(word_prob[next_token_id[0]])
     else:
         sum_prob = Decimal(0.0)
@@ -287,6 +296,7 @@ def generate_next_token(input_ids,current_max,current_num,secret_num):
             if valid_words[i][0]=='▁':
                 temp=valid_words[i][1:]
                 valid_words[i]=temp
+        # print(valid_words)
         # for i in range(len(chars_freqs)):
         #     print('[',valid_words[i],chars_freqs[i][1],']',end=',')
         # print()
@@ -294,40 +304,41 @@ def generate_next_token(input_ids,current_max,current_num,secret_num):
         # for i in range(len(chars_freqs)):
         #     print('[',valid_words[i],chars_freqs[i][1],']',end=',')
         # print('____________________________')
-        new_prob={}
-
-        for id in chars_freqs:
-            new_prob[id[0].item()]=id[1]
-            sum_prob+=Decimal(id[1])
-
-
-
-        init_current=Decimal(current_num)
-        init_max=Decimal(current_max)
-        current_num=Decimal(current_num)
-        index=0
-        ambiguity = 0
-        for id in  chars_freqs:
-            #print((new_prob[id.item()]))
-            if Decimal(current_num) + ((Decimal(new_prob[id[0].item()])/Decimal(sum_prob))*Decimal(current_max))>=Decimal(secret_num) :
-                for j in range(len(valid_words)):
-                    if (j!=index) and (valid_words[j].startswith(valid_words[index]) or valid_words[index].startswith(valid_words[j])):
-                        ambiguity=1
-                        break
-                if ambiguity==0:
-                    next_token_id=torch.tensor([id[0]])
-                    add_prob = math.log(id[1])
-                    current_max=(Decimal(id[1])/Decimal(sum_prob))*Decimal(current_max)
-                    # print('No ambiguity')
-                    # print(sum_prob)
-                    #print('[', current_num, ',', Decimal(current_num) + current_max,']')
-                    return next_token_id, add_prob, flag, current_num,current_max,sum_prob
-                else:
-                    # print('Ambiguity')
-                    break
-            else:
-                current_num += (Decimal(id[1])/Decimal(sum_prob))*Decimal(current_max)
-            index+=1
+        # new_prob={}
+        #
+        # for id in chars_freqs:
+        #     new_prob[id[0].item()]=id[1]
+        #     sum_prob+=Decimal(id[1])
+        #
+        #
+        #
+        # init_current=Decimal(current_num)
+        # init_max=Decimal(current_max)
+        # current_num=Decimal(current_num)
+        # index=0
+        # ambiguity = 0
+        # for id in  chars_freqs:
+        #     #print((new_prob[id.item()]))
+        #     if Decimal(current_num) + ((Decimal(new_prob[id[0].item()])/Decimal(sum_prob))*Decimal(current_max))>=Decimal(secret_num) :
+        #         for j in range(len(valid_words)):
+        #             if (j!=index) and (valid_words[j].startswith(valid_words[index]) or valid_words[index].startswith(valid_words[j])):
+        #                 ambiguity=1
+        #                 break
+        #         if ambiguity==0:
+        #             next_token_id=torch.tensor([id[0]])
+        #             add_prob = math.log(id[1])
+        #             current_max=(Decimal(id[1])/Decimal(sum_prob))*Decimal(current_max)
+        #             # print('No ambiguity')
+        #             # print(sum_prob)
+        #             #print('[', current_num, ',', Decimal(current_num) + current_max,']')
+        #             print(valid_words)
+        #             return next_token_id, add_prob, flag, current_num,current_max,sum_prob
+        #         else:
+        #             # print('Ambiguity')
+        #             break
+        #     else:
+        #         current_num += (Decimal(id[1])/Decimal(sum_prob))*Decimal(current_max)
+        #     index+=1
         # ambiguity=1
         chars_freqs,valid_words=MWIS(chars_freqs,valid_words)
         new_prob={}
@@ -335,8 +346,7 @@ def generate_next_token(input_ids,current_max,current_num,secret_num):
         for id in chars_freqs:
             new_prob[id[0].item()]=id[1]
             sum_prob+=Decimal(id[1])
-        current_num=init_current
-        current_max=init_max
+
         for id in  chars_freqs:
             #print((new_prob[id.item()]))
             if Decimal(current_num) + ((Decimal(new_prob[id[0].item()])/Decimal(sum_prob))*Decimal(current_max))>=Decimal(secret_num) :
@@ -347,6 +357,7 @@ def generate_next_token(input_ids,current_max,current_num,secret_num):
                 # print(sum_prob)
                 #print(current_max)
                 #print('[', current_num, ',', Decimal(current_num) + current_max,']')
+                # print(valid_words)
                 return next_token_id, add_prob, flag, current_num,current_max,sum_prob
             else:
                 current_num += (Decimal(id[1])/Decimal(sum_prob))*Decimal(current_max)
@@ -383,8 +394,8 @@ def generate(max_len,MAX_NUM):
         bits = secret_bits[ii:ii + len(secret_bits)]
         ii += len(secret_bits)
         secret_num = int(bits, 2)
-        print(secret_num)
-        print('{}/{}'.format(ii, len(secret_bits)))
+        # print(secret_num)
+        # print('{}/{}'.format(ii, len(secret_bits)))
         while True:
 
             next_token_id,add_prob,flag,current_num,current_max,eta = generate_next_token(input_ids[:, -args.context_len:],Decimal(current_max),Decimal(current_num),Decimal(secret_num))
@@ -396,7 +407,7 @@ def generate(max_len,MAX_NUM):
             input_ids = torch.cat((input_ids, next_token_id.unsqueeze(0)), dim=1)
             cur_len += 1
             word = tokenizer.convert_ids_to_tokens(next_token_id.item())
-            #print(word)
+            # print(word)
             word_list.append(word)
             if flag == 1:
 
@@ -430,8 +441,9 @@ def generate(max_len,MAX_NUM):
             result+=word[1::]
         else:
             result+=word
-
-    return result
+    bpw=format(len(secret_bits)/(len(word_list)-drop_pad-drop-input_len),'.4f')
+    # print(len(word_list),drop_pad,drop,input_len)
+    return result,bpw
 
 
 
@@ -449,13 +461,15 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str, default='model/zuowen_epoch40')
     parser.add_argument('--title', type=str, default='')
     parser.add_argument('--context', type=str, default='', help='prompt')
-    parser.add_argument('--num_samples', type=int, default=16, help='candidate size')
+    parser.add_argument('--num_samples', type=int, default=64, help='candidate size')
     parser.add_argument('--secret', type=str, default='bit_stream.txt')
     parser.add_argument('--generate_num', type=int, default=1)
-    parser.add_argument('--approach', type=str, default='enumerate', help='greedy or enumerate')
+    parser.add_argument('--approach', type=str, default='greedy', help='greedy or enumerate')
+    parser.add_argument('--seed', type=int, default=18, help='随机种子')
+    parser.add_argument('--message_length', type=int, default=256, help='message长度')
 
     args = parser.parse_args()
-
+    setup_seed(args.seed)
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     device = 'cuda:0' if args.cuda else 'cpu'
@@ -463,7 +477,9 @@ if __name__ == '__main__':
 
     secret_bits = ''
     with open(args.secret, "r") as f:
-        secret_bits = f.read()
+        secret_bits = f.read()*10
+    secret_bits=secret_bits[0:args.message_length]
+    print('{}-bit message:{}'.format(len(secret_bits),secret_bits))
     MAX_NUM=Decimal(2**len(secret_bits))
 
 
@@ -483,8 +499,14 @@ if __name__ == '__main__':
 
 
     for i in range(args.generate_num):
-        result= generate(args.max_len,Decimal(MAX_NUM))
+        StartTime = time.time()
+        result,bpw= generate(args.max_len,Decimal(MAX_NUM))
+        EndTime = time.time()
+        print('Embedding time={} s'.format(format(EndTime-StartTime,'.4f')))
         result = result.split("<sep>")[1]
+        print('Embedding rate I={} (bits/token)'.format(bpw))
+        print('Embedding rate II={} (%)'.format(format(100*len(secret_bits)/(len(result)*16),'.4f')))
         print(result)
-
+        with open('stego.txt','w') as f:
+            f.write(result)
 
