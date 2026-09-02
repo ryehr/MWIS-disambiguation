@@ -84,11 +84,30 @@ just building the adjacency by pairwise `startswith`) while attaining the
 enumeration baseline's optimum. See [`mwis_stego/antichain.py`](mwis_stego/antichain.py).
 `greedy` and `enumerate_cc` are retained as baselines for comparison.
 
+**The trie need not be materialised.** Pools are small — k ≤ 128 candidates of a
+few bytes each — so in Python the constant factor decides, and allocating a node
+object with a child dict per trie node costs far more than the traversal saves.
+Sorting the candidates lexicographically exposes the same structure without any
+of that: if `tᵢ` is a prefix of `tⱼ` then `i < j` in lex order, and every
+candidate between them also starts with `tᵢ`. Two consequences:
+
+- A pool contains a prefix conflict **iff some adjacent pair does**, so a single
+  O(k) scan decides it. Between 14% and 57% of real pools are conflict-free
+  depending on top-k, and those return immediately.
+- Parent pointers of the prefix forest fall out of one stack pass, after which
+  the DP is two flat array sweeps — no per-node object anywhere.
+
+This is 9–11× faster than the explicit trie on real pools (§7.1). The trie
+version is kept as `exact_trie`: it states the recurrence one-to-one and the
+tests assert the two agree token for token, which is the property that matters —
+both sides of the channel must retain the *identical* pool, not merely pools of
+equal weight.
+
 Verified in [`tests/test_antichain.py`](tests/test_antichain.py): over 3000
 randomly generated prefix-structured pools, `exact` matches a brute-force MWIS
 over all 2ⁿ subsets on every instance, as does `enumerate_cc`. Optimality is also
 confirmed on real data — `exact` agrees with `enumerate_cc` on every pool the
-latter can solve (§7.1).
+latter can solve (§7.2).
 
 **How much this is worth in η depends on the pool, and on real pools it is
 small.** The synthetic pools above make `greedy` strictly suboptimal on 15.1% of
@@ -299,29 +318,46 @@ did; the embedded prefix still verifies), `mismatch` (a genuine decode failure),
 
 ## 7. Results
 
-### 7.1 Solvers, on identical pools
+### 7.1 Solver cost
+
+Microseconds per pool, on pools recorded from real English generation runs
+(`scripts/bench_solvers.py`, best of 5 passes):
+
+| top-k | pools | with a conflict | `exact` | `exact_trie` | `greedy` |
+|---|---|---|---|---|---|
+| 8 | 531 | 42.9% | **4.5** | 49.9 | 29.5 |
+| 16 | 687 | 63.3% | **7.4** | 71.9 | 61.5 |
+| 32 | 458 | 79.0% | **18.8** | 179.1 | 256.7 |
+| 64 | 475 | 84.8% | **36.8** | 343.1 | 854.7 |
+| 128 | 447 | 86.1% | **71.4** | 660.6 | 2 985.5 |
+
+- **`exact` is faster than `greedy` at every pool size** — 6.6× at top-8, rising
+  to **41.8× at top-128**.
+- **The measured scaling matches the analysis.** Over a 16× increase in pool size
+  `exact` grows 15.9× (linear) while `greedy` grows 101× (quadratic): its O(k²)
+  adjacency construction dominates well before top-128.
+- Dropping the explicit trie is worth **9–11×** across the whole range (§3.1).
+
+### 7.2 Solver quality, on identical pools
 
 Every solver replayed on the same recorded English pools (Qwen3-0.6B, chat mode,
 12 FLORES prompts per cell). `exact` and `greedy` solve every pool, so their
-means are directly paired; `enumerate_cc` gives up on the largest components, so
-only its runtime and its failure count are quoted here.
+means are directly paired; `enumerate_cc` gives up on the largest components.
+(Timings here are from an earlier build and are superseded by §7.1; what this
+table establishes is *quality* and *feasibility*.)
 
-| top-k | pools | `exact` η | `greedy` Δη | `greedy` loses on | `enumerate` infeasible | µs/pool `exact` | `greedy` | `enumerate` |
-|---|---|---|---|---|---|---|---|---|
-| 8 | 1554 | 0.990457 | −2.7 × 10⁻⁶ % | 5 (0.3%) | 0 | 41.8 | 24.7 | 29.5 |
-| 16 | 1872 | 0.990525 | −9.5 × 10⁻⁶ % | 10 (0.5%) | 0 | 57.6 | 49.0 | 2 638 |
-| 32 | 963 | 0.983814 | −1.4 × 10⁻³ % | 27 (2.8%) | 41 (4.3%) | 180.8 | 256.3 | 82 481 |
+| top-k | pools | `exact` η | `greedy` Δη | `greedy` loses on | `enumerate` infeasible | `enumerate` µs/pool |
+|---|---|---|---|---|---|---|
+| 8 | 1554 | 0.990457 | −2.7 × 10⁻⁶ % | 5 (0.3%) | 0 | 29.5 |
+| 16 | 1872 | 0.990525 | −9.5 × 10⁻⁶ % | 10 (0.5%) | 0 | 2 638 |
+| 32 | 963 | 0.983814 | −1.4 × 10⁻³ % | 27 (2.8%) | 41 (4.3%) | 82 481 |
 
 - **`exact` agrees with `enumerate_cc` on every pool the latter solves**, which
   confirms optimality on real data and not only on the synthetic instances of
   §3.1.
 - **`greedy`'s shortfall is real but small, and grows with top-k** — from 0.3% to
   2.8% of pools between top-8 and top-32. Its *average* η cost is negligible. The
-  argument for `exact` is that it is optimal by construction, and cheaper.
-- **`exact` overtakes `greedy` in speed as pools grow**: slower at top-8 (trie
-  construction has a constant overhead that a 8-node pool cannot amortise), even
-  at top-16, and 1.4× faster at top-32, where `greedy`'s O(k²) adjacency
-  construction begins to dominate.
+  argument for `exact` is that it is optimal by construction, and cheaper (§7.1).
 - **The enumeration baseline is not merely slow — it is infeasible.** Its cost
   rises 2 800× from top-8 to top-32, and at top-32 it hits connected components
   of up to **31 nodes** (2³¹ subsets) on 4.3% of pools. The paper's claim that
@@ -336,7 +372,7 @@ only its runtime and its failure count are quoted here.
 > `exact` on that same subset. Compared properly, `enumerate_cc` never beats
 > `exact` on any pool.
 
-### 7.2 End to end
+### 7.3 End to end
 
 The full matrix (3 languages × 4 methods × top-k ∈ {8, 32, 128}) is produced by
 `scripts/run_experiments.py`; see `runs/`. Extraction is verified on every
@@ -360,8 +396,11 @@ mwis_stego/coder.py       arithmetic coder + disambiguation; encode and decode
 mwis_stego/model.py       Qwen3 loading, chat and raw contexts
 mwis_stego/data.py        parallel FLORES and Wikipedia prompts
 scripts/run_experiments.py    end-to-end metrics, round trip verified per sample
-scripts/compare_solvers.py    solver comparison on identical recorded pools
-tests/test_antichain.py       solver vs brute-force MWIS
+scripts/compare_solvers.py    solver quality on identical recorded pools
+scripts/bench_solvers.py      solver cost on identical recorded pools
+scripts/build_corpus.py       paired stego / cover corpora for steganalysis
+scripts/steganalysis.py       n-gram and XLM-R detectors
+tests/test_antichain.py       solvers vs brute-force MWIS; exact vs exact_trie
 tests/test_roundtrip.py       embed -> extract, three languages
 legacy/                       the original CPM implementation, unmodified
 ```

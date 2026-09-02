@@ -3,7 +3,9 @@ import random
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mwis_stego.antichain import exact, greedy, enumerate_cc, brute_force, is_antichain
+from mwis_stego.antichain import (
+    exact, exact_trie, greedy, enumerate_cc, brute_force, is_antichain,
+)
 
 
 def random_pool(rng, n, alphabet=b"abc", maxlen=4):
@@ -33,12 +35,17 @@ def main():
 
         opt = weight(w, brute_force(toks, w))
         e = exact(toks, w)
+        et = exact_trie(toks, w)
         c = enumerate_cc(toks, w)
         g = greedy(toks, w)
 
         assert is_antichain(toks, e), f"exact produced a conflict: {toks} {e}"
         assert is_antichain(toks, c), f"enumerate produced a conflict: {toks} {c}"
         assert is_antichain(toks, g), f"greedy produced a conflict: {toks} {g}"
+
+        # The two exact solvers must agree token for token, not merely in weight:
+        # both sides of the channel must retain the identical pool.
+        assert e == et, f"exact and exact_trie disagree: {toks} {w}\n  {e}\n  {et}"
 
         assert weight(w, e) == opt, f"exact suboptimal: {toks} {w} got {weight(w,e)} want {opt}"
         assert weight(w, c) == opt, f"enumerate suboptimal: {toks} {w}"

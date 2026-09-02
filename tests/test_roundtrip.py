@@ -29,6 +29,12 @@ def main():
     rng = random.Random(1234)
     message = [rng.randint(0, 1) for _ in range(64)]
 
+    # `exact` and `greedy` must round-trip.  The other two are demonstrations,
+    # not regressions: `none` is expected to fail, because that failure is the
+    # evidence that segmentation ambiguity is real in each language, and
+    # `enumerate` is expected to give up on English, because the infeasibility of
+    # the paper's exponential baseline on byte-BPE pools is itself a finding.
+    MUST_DECODE = {"exact", "greedy"}
     failures = 0
     for method in ["exact", "greedy", "enumerate", "none"]:
         for lang, prompt in PROMPTS.items():
@@ -41,20 +47,23 @@ def main():
             except Exception as exc:
                 ids, stego, es, ok = [], b"", None, False
                 err = f"{type(exc).__name__}: {exc}"
+            expected = method in MUST_DECODE
             if es is None:
-                print(f"  {method:9} {lang}  FAIL  {err}")
-                failures += 1
+                verdict = "FAIL     " if expected else "as expected"
+                failures += expected
+                print(f"  {method:9} {lang}  {verdict}  {err}")
                 continue
             s = es.summary()
             bpt = len(message) / max(len(ids), 1)
             text = stego.decode("utf-8", errors="replace")
-            print(f"  {method:9} {lang}  {'OK ' if ok else 'MISMATCH'}  "
+            verdict = "OK      " if ok else ("MISMATCH" if expected else "undecodable")
+            failures += expected and not ok
+            print(f"  {method:9} {lang}  {verdict}  "
                   f"tokens={len(ids):3d} bpt={bpt:5.3f} eta={s['mean_eta']:.4f} "
                   f"kldc={s['kld_c_bits']:.4f}b ppl={s['ppl']:7.2f} amb={s['ambiguous_frac']:.2f}")
             print(f"             {text[:70]!r}")
-            failures += (not ok)
 
-    print("FAILURES:", failures)
+    print("UNEXPECTED FAILURES:", failures)
     return 1 if failures else 0
 
 

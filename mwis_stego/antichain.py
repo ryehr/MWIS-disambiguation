@@ -35,8 +35,8 @@ from __future__ import annotations
 from collections import deque
 from typing import Sequence
 
-__all__ = ["exact", "greedy", "enumerate_cc", "brute_force", "conflict_edges",
-           "is_antichain", "EnumerationInfeasible"]
+__all__ = ["exact", "exact_trie", "greedy", "enumerate_cc", "brute_force",
+           "conflict_edges", "is_antichain", "EnumerationInfeasible"]
 
 
 class EnumerationInfeasible(RuntimeError):
@@ -69,9 +69,84 @@ class _TrieNode:
 def exact(tokens: Sequence[bytes], weights: Sequence[int]) -> list[int]:
     """Maximum weight antichain of the prefix order, exactly.
 
-    Returns the retained indices in ascending order.  Ties are broken towards
-    the *descendants* (`own` wins only when strictly heavier), which keeps more
-    tokens in the pool at equal eta and so costs no embedding rate.
+    Same result as `exact_trie`, without materialising the trie.
+
+    Sorting the candidates lexicographically makes the prefix order explicit:
+    if `t_i` is a prefix of `t_j` then `i < j`, and every candidate between them
+    also starts with `t_i`.  Two consequences:
+
+    * A pool contains a prefix conflict **iff some adjacent pair does**, so one
+      O(k) scan decides it.  Real pools are conflict-free 10-35% of the time and
+      those return immediately.
+    * Parent pointers of the prefix forest fall out of a single stack pass, with
+      no per-node object or dict.  That is the whole cost of the trie version in
+      Python, and pools here are small enough (k <= 128, a few bytes each) that
+      the constant factor decides, not the asymptotics.
+
+    Ties are broken towards the *descendants* (a node's own weight wins only when
+    strictly heavier), which retains more tokens at equal eta and so costs no
+    embedding rate.  The rule must be deterministic, not merely reasonable: the
+    sender and receiver run this independently and must agree exactly.
+    """
+    k = len(tokens)
+    if k <= 1:
+        return list(range(k))
+
+    order = sorted(range(k), key=tokens.__getitem__)
+    sorted_toks = [tokens[i] for i in order]
+
+    # Fast path: no adjacent pair conflicts => no pair conflicts at all.
+    conflict = False
+    for j in range(k - 1):
+        if sorted_toks[j + 1].startswith(sorted_toks[j]):
+            conflict = True
+            break
+    if not conflict:
+        return list(range(k))
+
+    # Parent pointers of the prefix forest, in one stack pass.
+    parent = [-1] * k
+    stack: list[int] = []
+    for j in range(k):
+        tok = sorted_toks[j]
+        while stack and not tok.startswith(sorted_toks[stack[-1]]):
+            stack.pop()
+        parent[j] = stack[-1] if stack else -1
+        stack.append(j)
+
+    # Bottom-up DP.  Children always have a larger index than their parent, so a
+    # single reverse pass sees every child before its parent.
+    w = [weights[i] for i in order]
+    below = [0] * k
+    take = [False] * k
+    for j in range(k - 1, -1, -1):
+        own = w[j]
+        if own > below[j]:
+            best, take[j] = own, True
+        else:
+            best = below[j]
+        p = parent[j]
+        if p >= 0:
+            below[p] += best
+
+    # Descend: keep a node if it is taken and no ancestor was taken before it.
+    kept: list[int] = []
+    reachable = [False] * k
+    for j in range(k):
+        p = parent[j]
+        reachable[j] = True if p < 0 else (reachable[p] and not take[p])
+        if reachable[j] and take[j]:
+            kept.append(order[j])
+    kept.sort()
+    return kept
+
+
+def exact_trie(tokens: Sequence[bytes], weights: Sequence[int]) -> list[int]:
+    """Reference implementation of `exact`, building the trie explicitly.
+
+    Kept because it mirrors the recurrence in the write-up one-to-one and so is
+    the clearer statement of *why* the answer is optimal; `exact` is the same
+    computation with the trie left implicit.  The tests assert they agree.
     """
     if not tokens:
         return []
