@@ -86,9 +86,19 @@ enumeration baseline's optimum. See [`mwis_stego/antichain.py`](mwis_stego/antic
 
 Verified in [`tests/test_antichain.py`](tests/test_antichain.py): over 3000
 randomly generated prefix-structured pools, `exact` matches a brute-force MWIS
-over all 2ⁿ subsets on every instance, as does `enumerate_cc`. The paper's greedy
-solver is **strictly suboptimal on 15.1%** of those pools, giving up **12.6%** of
-η on average where it loses.
+over all 2ⁿ subsets on every instance, as does `enumerate_cc`. Optimality is also
+confirmed on real data — `exact` agrees with `enumerate_cc` on every pool the
+latter can solve (§7.1).
+
+**How much this is worth in η depends on the pool, and on real pools it is
+small.** The synthetic pools above make `greedy` strictly suboptimal on 15.1% of
+instances, but they are built from short random strings over a three-letter
+alphabet and so are far denser in prefix relations than a real candidate pool;
+that figure does not transfer. Measured on actual Qwen3 pools, `greedy` falls
+short of the optimum on 0.3–2.8% of pools depending on top-k, and by a negligible
+margin on average. The case for the exact solver rests on the other two axes: it
+is optimal *by construction* rather than empirically close, and its cost grows
+linearly rather than quadratically (`greedy`) or exponentially (`enumerate_cc`).
 
 ### 3.2 The conditional skip in Algorithm 1 is not invertible
 
@@ -287,37 +297,59 @@ did; the embedded prefix still verifies), `mismatch` (a genuine decode failure),
 | `amb` | fraction of steps whose pool contained a prefix conflict |
 | `solve_s` | wall time inside the disambiguation solver, per stego text |
 
-## 7. Preliminary results
+## 7. Results
 
-Full matrices are produced by the commands in §6. The figures below are from a
-**smoke-scale run** (Qwen3-0.6B, chat mode, top-16, 64-bit messages, n=5 prompts
-per cell) and are reported with that scale stated rather than rounded up into
-claims:
+### 7.1 Solvers, on identical pools
 
-| lang | method | η | KLD-c (bits) | amb | solver time |
-|---|---|---|---|---|---|
-| en | `exact` | **0.9505** | **0.0844** | 0.66 | 11.5 ms |
-| en | `greedy` | 0.9406 | 0.1096 | 0.64 | 9.0 ms |
-| zh | `exact` | **0.9155** | **0.1454** | 0.81 | 7.3 ms |
-| zh | `greedy` | 0.9145 | 0.1477 | 0.79 | 7.5 ms |
-| ja | `exact` | **0.9326** | **0.1153** | 0.84 | 11.2 ms |
-| ja | `greedy` | 0.9318 | 0.1204 | 0.81 | 14.3 ms |
-| all | `none` | — | — | — | 15/15 fail to round-trip |
+Every solver replayed on the same recorded English pools (Qwen3-0.6B, chat mode,
+12 FLORES prompts per cell). `exact` and `greedy` solve every pool, so their
+means are directly paired; `enumerate_cc` gives up on the largest components, so
+only its runtime and its failure count are quoted here.
 
-Observations that are stable across configurations:
+| top-k | pools | `exact` η | `greedy` Δη | `greedy` loses on | `enumerate` infeasible | µs/pool `exact` | `greedy` | `enumerate` |
+|---|---|---|---|---|---|---|---|---|
+| 8 | 1554 | 0.990457 | −2.7 × 10⁻⁶ % | 5 (0.3%) | 0 | 41.8 | 24.7 | 29.5 |
+| 16 | 1872 | 0.990525 | −9.5 × 10⁻⁶ % | 10 (0.5%) | 0 | 57.6 | 49.0 | 2 638 |
+| 32 | 963 | 0.983814 | −1.4 × 10⁻³ % | 27 (2.8%) | 41 (4.3%) | 180.8 | 256.3 | 82 481 |
 
-- **`exact` dominates `greedy` on KLD-c in all three languages**, by 23% in
-  English. English shows the largest gap because byte-level BPE produces larger,
-  more tangled prefix components, which is where a forest-extraction heuristic
-  loses the most.
-- **The enumeration baseline is not merely slow — it is infeasible.** At top-32
-  in English it hits a connected component of **31 nodes**, i.e. 2³¹ subsets. The
-  paper's claim that enumeration "may be still a fast way in small-scale
-  connected components" reflects testing only Chinese CPM; English BPE pools can
-  be almost entirely one component. The exact solver handles them in linear time.
-- **Solver cost is negligible**: 7–14 ms per stego text of 60–95 tokens, roughly
-  0.1 ms per step, against a full model forward pass per step. The running-time
-  comparison in the paper's Table II is dominated by other factors.
+- **`exact` agrees with `enumerate_cc` on every pool the latter solves**, which
+  confirms optimality on real data and not only on the synthetic instances of
+  §3.1.
+- **`greedy`'s shortfall is real but small, and grows with top-k** — from 0.3% to
+  2.8% of pools between top-8 and top-32. Its *average* η cost is negligible. The
+  argument for `exact` is that it is optimal by construction, and cheaper.
+- **`exact` overtakes `greedy` in speed as pools grow**: slower at top-8 (trie
+  construction has a constant overhead that a 8-node pool cannot amortise), even
+  at top-16, and 1.4× faster at top-32, where `greedy`'s O(k²) adjacency
+  construction begins to dominate.
+- **The enumeration baseline is not merely slow — it is infeasible.** Its cost
+  rises 2 800× from top-8 to top-32, and at top-32 it hits connected components
+  of up to **31 nodes** (2³¹ subsets) on 4.3% of pools. The paper's claim that
+  enumeration "may still be a fast way in small-scale connected components"
+  reflects testing only Chinese CPM; English byte-level BPE pools can be almost
+  entirely one component.
+
+> A caveat worth carrying into any write-up: `enumerate_cc`'s *unrestricted* mean
+> η looks **higher** than `exact`'s at top-32, because it averages only over the
+> pools it could solve and silently drops the 41 hardest. `compare_solvers.py`
+> therefore reports means restricted to each solver's own solved set alongside
+> `exact` on that same subset. Compared properly, `enumerate_cc` never beats
+> `exact` on any pool.
+
+### 7.2 End to end
+
+The full matrix (3 languages × 4 methods × top-k ∈ {8, 32, 128}) is produced by
+`scripts/run_experiments.py`; see `runs/`. Extraction is verified on every
+sample.
+
+Established so far:
+
+- **`none` never round-trips**, in any of the three languages — see §3.4.
+- **Round-trip integrity holds** for `exact` and `greedy`: zero decode mismatches
+  across all samples run to date.
+- **Solver cost is negligible end to end**: 7–14 ms per stego text of 60–95
+  tokens, roughly 0.1 ms per step, against one full model forward pass per step.
+  Whatever the paper's Table II is measuring, it is not dominated by the solver.
 
 ## 8. Layout
 

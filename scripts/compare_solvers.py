@@ -95,8 +95,8 @@ def main():
     lm = StegoLM(args.model, device=args.device)
     prompts = {l: SOURCES[args.source](l, n=args.n) for l in args.langs}
 
-    hdr = (f"{'lang':4} {'topk':>4} {'pools':>6} {'method':10} {'eta':>8} "
-           f"{'d_eta%':>7} {'us/pool':>9} {'infeas':>7} {'lost':>6}")
+    hdr = (f"{'lang':4} {'topk':>4} {'pools':>6} {'method':10} {'eta':>9} "
+           f"{'d_eta%':>9} {'us/pool':>9} {'infeas':>7} {'lost':>6}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -105,20 +105,31 @@ def main():
             for topk in args.topks:
                 pools = collect_pools(lm, prompts[lang], topk, args)
                 results = {n: evaluate(pools, n, s) for n, s in SOLVERS.items()}
-                base = results["exact"]["mean_eta"]
+                ref = results["exact"]["_per_pool"]
                 for name, r in results.items():
-                    # pools where this solver is strictly worse than exact
-                    lost = sum(
-                        1 for a, b in zip(r["_per_pool"], results["exact"]["_per_pool"])
-                        if a is not None and b is not None and a < b - 1e-12
-                    )
-                    d = 100 * (r["mean_eta"] - base) / base if base else 0.0
+                    mine = r["_per_pool"]
+                    # A solver that gives up on its hardest instances must not be
+                    # credited with the easy ones' average: compare both solvers
+                    # only over the pools this one actually solved.
+                    paired = [(a, b) for a, b in zip(mine, ref) if a is not None and b is not None]
+                    lost = sum(1 for a, b in paired if a < b - 1e-12)
+                    mine_mean = sum(a for a, _ in paired) / max(len(paired), 1)
+                    ref_mean = sum(b for _, b in paired) / max(len(paired), 1)
+                    d = 100 * (mine_mean - ref_mean) / ref_mean if ref_mean else 0.0
+
                     print(f"{lang:4} {topk:4d} {len(pools):6d} {name:10} "
-                          f"{r['mean_eta']:8.5f} {d:+7.3f} {r['us_per_pool']:9.1f} "
+                          f"{mine_mean:9.6f} {d:+9.5f} {r['us_per_pool']:9.1f} "
                           f"{r['infeasible']:7d} {lost:6d}")
                     rec = {k: v for k, v in r.items() if not k.startswith("_")}
-                    rec.update({"lang": lang, "topk": topk, "lost_vs_exact": lost,
-                                "delta_eta_pct": d})
+                    rec.update({
+                        "lang": lang, "topk": topk, "lost_vs_exact": lost,
+                        # means restricted to the pools this solver solved, so the
+                        # comparison is paired; `mean_eta` above is unrestricted.
+                        "matched_pools": len(paired),
+                        "matched_eta": mine_mean,
+                        "matched_eta_exact": ref_mean,
+                        "delta_eta_pct": d,
+                    })
                     fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 fh.flush()
     print(f"\nwrote {args.out}")
