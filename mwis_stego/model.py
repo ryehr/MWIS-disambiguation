@@ -26,10 +26,17 @@ class StegoLM:
         self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype)
         self.model.eval().to(device)
         self.device = device
-        self.vocab = ByteVocab(self.tokenizer)
-        # Control tokens are literal text, never part of the covert stream.
+        # The output layer is wider than the tokenizer: Qwen3 pads its embedding
+        # matrix to 151936 rows against 151669 real tokens.  Size the byte table
+        # to the logits, or a padding id in the pool indexes past the end of it.
+        n_logits = int(self.model.get_output_embeddings().weight.shape[0])
+        self.vocab = ByteVocab(self.tokenizer, size=n_logits)
+        # Two kinds of id must never be selected: control tokens, which are
+        # literal text rather than part of the covert stream, and the padding
+        # slots, which have no bytes at all and would be a prefix of everything.
         self.banned_ids = torch.tensor(
-            sorted(self.tokenizer.get_added_vocab().values()), device=device, dtype=torch.long
+            sorted(set(self.tokenizer.get_added_vocab().values()) | set(self.vocab.undefined)),
+            device=device, dtype=torch.long,
         )
 
     def chat_context(self, prompt: str) -> list[int]:

@@ -36,15 +36,25 @@ def bytes_to_unicode() -> dict[int, str]:
 class ByteVocab:
     """Maps token ids to the exact bytes they emit."""
 
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, size: int | None = None):
+        """`size` should be the model's output dimension, not the tokenizer's length.
+
+        They differ: Qwen3's embedding matrix is padded to 151936 rows while the
+        tokenizer defines 151669 tokens, leaving 267 ids that carry a logit but
+        decode to nothing.  Those ids must never reach the candidate pool -- see
+        `undefined` below and `StegoLM.banned_ids`.
+        """
         self.tokenizer = tokenizer
         u2b = {v: k for k, v in bytes_to_unicode().items()}
         added = set(tokenizer.get_added_vocab().values())
-        size = len(tokenizer)
+        size = len(tokenizer) if size is None else max(size, len(tokenizer))
         table: list[bytes] = [b""] * size
+        undefined: list[int] = []
         for i in range(size):
             tok = tokenizer.convert_ids_to_tokens(i)
             if tok is None:
+                # A padding slot in the embedding matrix, with no token behind it.
+                undefined.append(i)
                 continue
             if i in added:
                 # Control tokens such as <|im_end|> are literal text, not byte-encoded.
@@ -53,6 +63,11 @@ class ByteVocab:
                 table[i] = bytes(u2b[c] for c in tok)
         self.table = table
         self.added = added
+        # Ids with no bytes at all.  An empty byte string is a prefix of every
+        # other string, so one of these entering a pool would make the whole pool
+        # conflict with itself and collapse the antichain -- silently, since
+        # nothing about it raises.  They are banned from the logits instead.
+        self.undefined = undefined
 
     def __len__(self) -> int:
         return len(self.table)

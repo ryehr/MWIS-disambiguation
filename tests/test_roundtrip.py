@@ -26,6 +26,21 @@ def main():
     ])
     print("byte roundtrip over sample texts: OK")
 
+    # The output layer is wider than the tokenizer (Qwen3: 151936 logits against
+    # 151669 tokens), and the surplus ids decode to no bytes.  An empty byte
+    # string is a prefix of every string, so one reaching a candidate pool would
+    # collapse the antichain to a single token without raising anything.  Every
+    # such id must be banned from the logits.
+    n_logits = int(lm.model.get_output_embeddings().weight.shape[0])
+    assert len(lm.vocab) >= n_logits, (
+        f"byte table ({len(lm.vocab)}) is narrower than the logits ({n_logits})"
+    )
+    banned = set(lm.banned_ids.tolist())
+    unbanned_empty = [i for i in range(n_logits) if not lm.vocab[i] and i not in banned]
+    assert not unbanned_empty, f"ids with no bytes are reachable: {unbanned_empty[:8]}"
+    print(f"vocabulary: {n_logits} logits, {len(lm.vocab.undefined)} undefined ids, "
+          f"{len(banned)} banned: OK")
+
     rng = random.Random(1234)
     message = [rng.randint(0, 1) for _ in range(64)]
 

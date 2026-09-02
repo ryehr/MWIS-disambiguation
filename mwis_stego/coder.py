@@ -140,6 +140,14 @@ def candidate_pool(logits_row, cur_interval, vocab, cfg, banned_ids, stats=None)
     pool_probs = probs[:k]
     pool_bytes = [vocab[i] for i in pool_ids]
 
+    # An empty byte string is a prefix of every other string, so a single one in
+    # the pool makes every candidate conflict with it and the antichain collapses
+    # to one token -- without raising anything.  Ids that decode to no bytes are
+    # banned in `StegoLM.banned_ids`; this catches any that get past that.
+    if not all(pool_bytes):
+        empty = [i for i, b in zip(pool_ids, pool_bytes) if not b]
+        raise AssertionError(f"candidate pool contains ids with no bytes: {empty}")
+
     # --- disambiguation -------------------------------------------------
     weights = (pool_probs * (1 << WEIGHT_PRECISION)).round().long().tolist()
     if cfg.method == "none":
