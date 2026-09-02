@@ -27,6 +27,7 @@ Both sides derive the pool through the *same* function, so they cannot drift.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -86,9 +87,11 @@ class StepStats:
     steps: int = 0
     pool_sizes: list[int] = field(default_factory=list)
     kept_sizes: list[int] = field(default_factory=list)
-    etas: list[float] = field(default_factory=list)        # eta_a: retained probability mass
+    etas: list[float] = field(default_factory=list)        # retained mass vs the whole vocabulary
+    pool_masses: list[float] = field(default_factory=list)  # mass the top-k cutoff keeps
+    etas_pool: list[float] = field(default_factory=list)   # eta_a: retained mass vs the pool
     kld_c: list[float] = field(default_factory=list)       # -log(eta_a), nats
-    kld_c_true: list[float] = field(default_factory=list)  # exact KL(q_renorm || p) in bits
+    kld_c_true: list[float] = field(default_factory=list)  # exact KL(q || p_pool) in bits
     logprobs: list[float] = field(default_factory=list)    # under the *model*, for perplexity
     ambiguous_steps: int = 0                               # pools that had a prefix conflict
     bits_used: int = 0                                     # message bits actually embedded
@@ -97,13 +100,14 @@ class StepStats:
     pools: list = field(default_factory=list)              # (token_bytes, integer weights)
 
     def summary(self) -> dict:
-        import math
         n = max(self.steps, 1)
         return {
             "steps": self.steps,
             "mean_pool": sum(self.pool_sizes) / n,
             "mean_kept": sum(self.kept_sizes) / n,
-            "mean_eta": sum(self.etas) / n,
+            "mean_eta": sum(self.etas_pool) / n,       # eta_a, pool-relative
+            "mean_eta_vocab": sum(self.etas) / n,      # includes the top-k cutoff
+            "mean_pool_mass": sum(self.pool_masses) / n,
             "kld_c_nats": sum(self.kld_c) / n,
             "kld_c_bits": sum(self.kld_c_true) / n,
             "ppl": math.exp(-sum(self.logprobs) / n),
@@ -148,6 +152,14 @@ def candidate_pool(logits_row, cur_interval, vocab, cfg, banned_ids, stats=None)
     if not kept:                       # every weight rounded to zero
         kept = [0]
 
+    # Two distortions are stacked here and must not be conflated.  The top-k
+    # cutoff already discards mass before disambiguation runs, and it is applied
+    # identically by every method -- including `none`.  Metrics measured against
+    # the whole vocabulary carry both; the paper's eta_a is the pool-relative
+    # one, which isolates disambiguation and is exactly 1 (KLD-c exactly 0) when
+    # nothing is removed.
+    pool_mass = float(pool_probs.sum())
+
     if stats is not None and stats.record_pools:
         stats.pools.append((pool_bytes, weights))
     if stats is not None:
@@ -155,8 +167,11 @@ def candidate_pool(logits_row, cur_interval, vocab, cfg, banned_ids, stats=None)
         stats.pool_sizes.append(k)
         stats.kept_sizes.append(len(kept))
         eta = float(pool_probs[kept].sum())
+        eta_pool = eta / pool_mass if pool_mass > 0 else 0.0
         stats.etas.append(eta)
-        stats.kld_c.append(-float(torch.log(torch.tensor(eta))) if eta > 0 else 0.0)
+        stats.pool_masses.append(pool_mass)
+        stats.etas_pool.append(eta_pool)
+        stats.kld_c.append(-math.log(eta_pool) if eta_pool > 0 else 0.0)
         if conflict:
             stats.ambiguous_steps += 1
 
@@ -181,7 +196,10 @@ def candidate_pool(logits_row, cur_interval, vocab, cfg, banned_ids, stats=None)
         final[1:] = cum[1:] - cum[:-1]
         qq = final.double() / final.sum()
         logq = qq.log()
-        logp = F.log_softmax(logits, dim=0)[kept_t]
+        # p renormalised over the pool, for the same reason as eta_pool above:
+        # this is the cost of disambiguating, not of the top-k cutoff that every
+        # method shares.  It is 0 when nothing is removed, up to quantisation.
+        logp = F.log_softmax(logits, dim=0)[kept_t] - math.log(max(pool_mass, 1e-300))
         contrib = qq * (logq - logp) / 0.69314718055994531
         contrib[qq == 0] = 0
         stats.kld_c_true.append(float(contrib.sum()))

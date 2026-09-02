@@ -307,10 +307,21 @@ did; the embedded prefix still verifies), `mismatch` (a genuine decode failure),
 
 ### Metrics
 
+Two distortions are stacked in this pipeline and the metrics keep them apart.
+The top-k cutoff discards probability mass *before* disambiguation runs, and it
+is applied identically by every method — `none` included. Reporting η against the
+whole vocabulary would therefore charge disambiguation for the truncation, and
+`none` would show a non-zero KLD-c despite removing nothing. All pool-relative
+quantities below are measured against the top-k pool, so `none` sits at exactly
+η = 1 and its residual KLD-c is the arithmetic coder's integer quantisation
+floor — which every method pays and which should be subtracted before comparing.
+
 | name | meaning |
 |---|---|
-| `eta` | retained probability mass `η`; the quantity `−log η` penalises |
-| `kldc_b` | `D_KL(CP_a ‖ CP)` in bits, computed exactly on the quantised pool |
+| `eta` | `η_a`, retained mass **relative to the top-k pool**; `−log η_a` is the KL |
+| `eta_vocab` | retained mass relative to the whole vocabulary (carries the cutoff too) |
+| `pool_mass` | mass the top-k cutoff keeps; the two above differ by this factor |
+| `kldc_b` | `D_KL(CP_a ‖ CP)` in bits, exact on the quantised pool, pool-relative |
 | `bpt` | bits embedded per generated token |
 | `ppl` | perplexity of the stego text under the unmodified model |
 | `amb` | fraction of steps whose pool contained a prefix conflict |
