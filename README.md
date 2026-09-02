@@ -324,6 +324,11 @@ floor — which every method pays and which should be subtracted before comparin
 | `eta_vocab` | retained mass relative to the whole vocabulary (carries the cutoff too) |
 | `pool_mass` | mass the top-k cutoff keeps; the two above differ by this factor |
 | `kldc_b` | `D_KL(CP_a ‖ CP)` in bits, exact on the quantised pool, pool-relative |
+
+`--steps-out` on `run_experiments.py` writes one row per generation step rather
+than one per text — per-step KL, η, pool and retained sizes, and whether the pool
+conflicted. Per-step KL is strongly right-skewed (§7.3), so a mean over steps is
+a poor summary of it and the raw series is worth keeping.
 | `bpt` | bits embedded per generated token |
 | `ppl` | perplexity of the stego text under the unmodified model |
 | `amb` | fraction of steps whose pool contained a prefix conflict |
@@ -450,6 +455,51 @@ against `greedy`'s 224–296 ms (~30×) and `enumerate_cc`'s seconds.
 > even though §7.1 shows `exact` weakly better on **every individual pool**.
 > Solver comparisons belong on identical pools; that is what §7.1 is for, and
 > what `compare_solvers.py` exists to measure.
+
+
+### 7.3 Per-step KL
+
+`--steps-out` writes one record per generation step. Aggregating those into a
+mean, as the paper's KLD-c does, throws away the shape of the distribution — and
+the shape is the finding. **20 229 steps**, `exact` and `greedy` pooled:
+
+| lang | top-k | steps | conflicting | mean | median | p75 | p90 | p99 | max | top 1% of steps carry | top 10% carry |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| en | 8 | 3134 | 36.6% | 0.0181 | **0.00000** | 0.0017 | 0.0372 | 0.4055 | 0.688 | 29.1% | 89.3% |
+| en | 32 | 1917 | 78.5% | 0.0285 | 0.00109 | 0.0119 | 0.0740 | 0.4590 | 1.028 | 23.5% | 78.7% |
+| en | 128 | 1868 | 86.3% | 0.0289 | 0.00151 | 0.0141 | 0.0723 | 0.4816 | 0.906 | 22.9% | 76.2% |
+| zh | 8 | 2176 | 66.4% | 0.0555 | 0.00456 | 0.0556 | 0.1864 | 0.5051 | 1.258 | 12.6% | 59.7% |
+| zh | 32 | 1859 | 86.6% | 0.0588 | 0.01023 | 0.0568 | 0.1735 | 0.5918 | 0.979 | 12.1% | 59.2% |
+| zh | 128 | 1642 | 87.5% | 0.0644 | 0.01375 | 0.0709 | 0.1973 | 0.5569 | 0.807 | 10.5% | 55.3% |
+| ja | 8 | 2868 | 64.1% | 0.0526 | 0.00178 | 0.0352 | 0.1665 | 0.6185 | 1.136 | 14.6% | 70.8% |
+| ja | 32 | 2505 | 84.0% | 0.0553 | 0.00460 | 0.0443 | 0.1713 | 0.6707 | 1.322 | 15.2% | 65.9% |
+| ja | 128 | 2260 | 89.2% | 0.0634 | 0.00608 | 0.0539 | 0.1852 | 0.6814 | 1.316 | 13.7% | 64.6% |
+
+Bits per step; the distribution is over steps, not over texts.
+
+**The cost is concentrated in a few steps, and the mean hides that.** Across all
+20 229 steps the **top 1% carry 15.8% of the total KL and the top 10% carry
+69.4%**. In English at top-8 the median step costs *nothing at all* while p99 is
+0.41 bits — the p99 exceeds the mean by 22× and the p90 by 11×. At top-32 the p99
+is over 400× the median. The mean KLD-c that the paper reports is an average over
+a distribution most of whose mass sits at zero.
+
+**Most steps are free even where conflicts are common.** 8.8% of steps have
+numerically zero KL, and at top-8 in English 63% of steps have no prefix conflict
+at all, so disambiguation is a no-op on them. Conflicts become near-universal as
+top-k grows (36.6% → 86.3% in English), but the median cost stays small: what
+grows is the tail.
+
+**Which language is expensive is not what §3.4 might suggest.** English carries
+roughly half the per-step KL of Chinese or Japanese — its pools conflict less
+often and less severely — but its *tail* is the most concentrated (top 10% of
+steps carry 89.3% of the cost at top-8, against 55–60% for Chinese). So English
+is cheaper on average and lumpier, which matters for any detector that looks at
+per-step statistics rather than aggregates.
+
+This also says where a better scheme would pay off: not in shaving the median,
+which is already zero, but in the handful of steps where a heavy candidate has to
+be dropped.
 
 ## 8. Layout
 

@@ -93,11 +93,34 @@ class StepStats:
     kld_c: list[float] = field(default_factory=list)       # -log(eta_a), nats
     kld_c_true: list[float] = field(default_factory=list)  # exact KL(q || p_pool) in bits
     logprobs: list[float] = field(default_factory=list)    # under the *model*, for perplexity
+    conflicts: list[bool] = field(default_factory=list)    # per step: did the pool conflict
     ambiguous_steps: int = 0                               # pools that had a prefix conflict
     bits_used: int = 0                                     # message bits actually embedded
     solve_seconds: float = 0.0                             # time inside the disambiguation solver
     record_pools: bool = False                             # keep raw pools for offline solver comparison
     pools: list = field(default_factory=list)              # (token_bytes, integer weights)
+
+    def steps_table(self) -> list[dict]:
+        """One record per generation step.
+
+        The aggregate in `summary` is a mean over these, which hides the shape of
+        the distribution -- per-step KL is heavily skewed, most steps costing
+        nothing and a few costing a lot, so a mean is a poor summary of it.
+        """
+        out = []
+        for i in range(self.steps):
+            at = lambda xs, d=None: xs[i] if i < len(xs) else d
+            out.append({
+                "step": i,
+                "kl_bits": at(self.kld_c_true),      # exact KL(q || p_pool)
+                "kl_nats": at(self.kld_c),           # -log(eta_a)
+                "eta": at(self.etas_pool),
+                "pool": at(self.pool_sizes),
+                "kept": at(self.kept_sizes),
+                "conflict": at(self.conflicts),
+                "logprob": at(self.logprobs),
+            })
+        return out
 
     def summary(self) -> dict:
         n = max(self.steps, 1)
@@ -180,6 +203,7 @@ def candidate_pool(logits_row, cur_interval, vocab, cfg, banned_ids, stats=None)
         stats.pool_masses.append(pool_mass)
         stats.etas_pool.append(eta_pool)
         stats.kld_c.append(-math.log(eta_pool) if eta_pool > 0 else 0.0)
+        stats.conflicts.append(conflict)
         if conflict:
             stats.ambiguous_steps += 1
 

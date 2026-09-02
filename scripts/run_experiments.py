@@ -30,7 +30,7 @@ from mwis_stego.data import SOURCES
 from mwis_stego.model import StegoLM
 
 
-def run_cell(lm, prompts, method, topk, args):
+def run_cell(lm, prompts, method, topk, args, steps_fh=None):
     rows = []
     rng = random.Random(args.seed)
     for p in prompts:
@@ -45,6 +45,11 @@ def run_cell(lm, prompts, method, topk, args):
             t0 = time.perf_counter()
             ids, stego, es = encode(lm.model, lm.vocab, message, ctx, cfg, lm.banned_ids)
             t1 = time.perf_counter()
+            if steps_fh is not None:
+                for rec in es.steps_table():
+                    rec.update({"lang": p.lang, "key": p.key, "method": method,
+                                "topk": topk, "source": args.source})
+                    steps_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
             bits, _ = decode(lm.model, lm.vocab, stego, ctx, cfg, lm.banned_ids)
             t2 = time.perf_counter()
 
@@ -114,6 +119,8 @@ def main():
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="runs/main.jsonl")
+    ap.add_argument("--steps-out", default="",
+                    help="also write one row per generation step (per-step KL, eta, pool sizes)")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -128,11 +135,17 @@ def main():
     print(hdr)
     print("-" * len(hdr))
 
+    steps_fh = None
+    if args.steps_out:
+        steps_path = Path(args.steps_out)
+        steps_path.parent.mkdir(parents=True, exist_ok=True)
+        steps_fh = steps_path.open("w", encoding="utf-8")
+
     with out.open("w", encoding="utf-8") as fh:
         for lang in args.langs:
             for method in args.methods:
                 for topk in args.topks:
-                    rows = run_cell(lm, prompts[lang], method, topk, args)
+                    rows = run_cell(lm, prompts[lang], method, topk, args, steps_fh)
                     for r in rows:
                         fh.write(json.dumps(r, ensure_ascii=False) + "\n")
                     fh.flush()
@@ -147,6 +160,9 @@ def main():
                     else:
                         print(f"{lang:4} {method:10} {topk:4d} {'0/' + str(s['n']):>6} "
                               f"  {s['status']}")
+    if steps_fh is not None:
+        steps_fh.close()
+        print(f"wrote {args.steps_out}")
     print(f"\nwrote {out}")
 
 
