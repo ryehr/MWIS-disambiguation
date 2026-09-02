@@ -151,8 +151,8 @@ conflicts", and on those pools MWIS already returns `CP_k` unchanged. **The skip
 can only ever be a fast path, never a security gain.** The η improvement the
 paper attributes to it does not exist.
 
-Measured here, 64–89% of all generation steps contain a prefix conflict
-(§6), so the skip would rarely fire even if it were sound.
+Measured here, 39–90% of all generation steps contain a prefix conflict,
+rising with top-k (§7.2), so the skip would rarely fire even if it were sound.
 
 **Consequence for the algorithm's role:** since disambiguation now provably runs
 at *every* step, its optimality and its cost stop being incidental. This is what
@@ -391,18 +391,65 @@ at every size measured.
 
 ### 7.2 End to end
 
-The full matrix (3 languages × 4 methods × top-k ∈ {8, 32, 128}) is produced by
-`scripts/run_experiments.py`; see `runs/`. Extraction is verified on every
-sample.
+Full matrix: 3 languages × 4 methods × top-k ∈ {8, 32, 128}, 12 parallel FLORES
+prompts per cell, 64-bit messages, 512-token budget. **Extraction is run on every
+sample.**
 
-Established so far:
+| lang | method | top-k | ok | bpt | η_a | KLD-c (bits) | PPL | amb | kept | solver ms |
+|---|---|---|---|---|---|---|---|---|---|---|
+| en | `exact` | 8 | 12/12 | 0.661 | 0.9875 | 0.0250 | 2.09 | 0.39 | 6.5 | **1.7** |
+| en | `exact` | 32 | 12/12 | 0.836 | 0.9837 | 0.0306 | 2.41 | 0.78 | 23.3 | **2.6** |
+| en | `exact` | 128 | 12/12 | 0.913 | 0.9818 | 0.0317 | 2.62 | 0.87 | 76.2 | **6.7** |
+| en | `greedy` | 8 | 12/12 | 0.652 | 0.9880 | 0.0237 | 2.08 | 0.37 | 6.5 | 5.5 |
+| en | `greedy` | 32 | 12/12 | 0.861 | 0.9849 | 0.0274 | 2.47 | 0.78 | 23.1 | 23.5 |
+| en | `greedy` | 128 | 12/12 | 0.865 | 0.9833 | 0.0283 | 2.47 | 0.85 | 74.2 | 236.1 |
+| en | `enumerate` | 8 | 12/12 | 0.661 | 0.9875 | 0.0250 | 2.09 | 0.39 | 6.5 | 5.6 |
+| en | `enumerate` | 32 | 4/12 | — | — | — | — | — | — | 859.2 |
+| en | `enumerate` | 128 | 0/12 | \* infeasible | | | | | | |
+| en | `none` | any | 0/12 | \* undecodable | | | | | | |
+| zh | `exact` | 8 | 12/12 | 0.742 | 0.9660 | 0.0578 | 2.33 | 0.66 | 6.2 | **1.5** |
+| zh | `exact` | 32 | 12/12 | 0.899 | 0.9617 | 0.0636 | 2.71 | 0.87 | 21.4 | **2.6** |
+| zh | `exact` | 128 | 12/12 | 1.096 | 0.9601 | 0.0673 | 3.29 | 0.88 | 75.8 | **6.2** |
+| zh | `greedy` | 8 | 12/12 | 0.737 | 0.9662 | 0.0578 | 2.33 | 0.66 | 6.2 | 4.4 |
+| zh | `greedy` | 32 | 12/12 | 0.872 | 0.9646 | 0.0596 | 2.62 | 0.86 | 21.4 | 24.9 |
+| zh | `greedy` | 128 | 12/12 | 1.032 | 0.9577 | 0.0701 | 3.03 | 0.88 | 72.6 | 224.0 |
+| zh | `enumerate` | 32 | 7/12 | — | — | — | — | — | — | 9 614.4 |
+| ja | `exact` | 8 | 12/12 | 0.607 | 0.9674 | 0.0574 | 2.14 | 0.63 | 6.3 | **2.1** |
+| ja | `exact` | 32 | 12/12 | 0.694 | 0.9630 | 0.0627 | 2.20 | 0.85 | 20.6 | **3.5** |
+| ja | `exact` | 128 | 12/12 | 0.736 | 0.9554 | 0.0744 | 2.28 | 0.90 | 73.9 | **9.6** |
+| ja | `greedy` | 8 | 12/12 | 0.607 | 0.9684 | 0.0557 | 2.11 | 0.64 | 6.3 | 5.9 |
+| ja | `greedy` | 32 | 12/12 | 0.718 | 0.9624 | 0.0626 | 2.26 | 0.87 | 20.9 | 30.7 |
+| ja | `greedy` | 128 | 12/12 | 0.884 | 0.9628 | 0.0625 | 2.76 | 0.90 | 75.9 | 296.4 |
+| ja | `enumerate` | 32 | 12/12 | 0.694 | 0.9630 | 0.0627 | 2.20 | 0.85 | 20.6 | 4 805.6 |
 
-- **`none` never round-trips**, in any of the three languages — see §3.4.
-- **Round-trip integrity holds** for `exact` and `greedy`: zero decode mismatches
-  across all samples run to date.
-- **Solver cost is negligible end to end**: 7–14 ms per stego text of 60–95
-  tokens, roughly 0.1 ms per step, against one full model forward pass per step.
-  Whatever the paper's Table II is measuring, it is not dominated by the solver.
+**Extraction is exact: zero decode mismatches** over all 275 samples that
+produced text, across every language, method and top-k. Three samples are
+`truncated` — the 512-token budget bound before the 64-bit message did — and the
+bits they did embed still verify.
+
+**`none` fails in all 108 attempts**, in all three languages and at every top-k:
+without disambiguation there is no decodable channel at all (§3.4).
+
+**`enumerate_cc` cannot complete the matrix.** It is infeasible on all 36
+top-128 samples, and on 8 of 12 English and 5 of 12 Chinese samples at top-32.
+Its surviving cells are struck from the table because they are a *biased* subset
+— the samples whose pools happened to stay small — and averaging them would
+reward the baseline for the instances it failed to solve.
+
+**Solver cost tracks §7.1**: at top-128 `exact` spends 6–10 ms per stego text
+against `greedy`'s 224–296 ms (~30×) and `enumerate_cc`'s seconds.
+
+**Ambiguity is pervasive and grows with top-k**: 0.39 → 0.87 of steps in English,
+0.66 → 0.88 in Chinese, 0.63 → 0.90 in Japanese, between top-8 and top-128.
+
+> **Do not read solver quality out of this table.** Each method generates its own
+> text, so the methods walk different trajectories and meet different pools; the
+> per-method η and KLD-c columns differ for that reason as much as for any
+> property of the solver. At n = 12 the trajectory variance dominates outright —
+> which is why `greedy` posts a *lower* KLD-c than `exact` in several cells here
+> even though §7.1 shows `exact` weakly better on **every individual pool**.
+> Solver comparisons belong on identical pools; that is what §7.1 is for, and
+> what `compare_solvers.py` exists to measure.
 
 ## 8. Layout
 
