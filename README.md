@@ -97,7 +97,8 @@ candidate between them also starts with `tᵢ`. Two consequences:
 - Parent pointers of the prefix forest fall out of one stack pass, after which
   the DP is two flat array sweeps — no per-node object anywhere.
 
-This is 9–11× faster than the explicit trie on real pools (§7.1). The trie
+This is 9–11× faster than the explicit trie on real pools, and makes the
+exact solver the fastest of the three at every pool size measured (§7.1). The trie
 version is kept as `exact_trie`: it states the recurrence one-to-one and the
 tests assert the two agree token for token, which is the property that matters —
 both sides of the channel must retain the *identical* pool, not merely pools of
@@ -107,17 +108,18 @@ Verified in [`tests/test_antichain.py`](tests/test_antichain.py): over 3000
 randomly generated prefix-structured pools, `exact` matches a brute-force MWIS
 over all 2ⁿ subsets on every instance, as does `enumerate_cc`. Optimality is also
 confirmed on real data — `exact` agrees with `enumerate_cc` on every pool the
-latter can solve (§7.2).
+latter can solve — 16 529 pools, no disagreement (§7.1).
 
 **How much this is worth in η depends on the pool, and on real pools it is
 small.** The synthetic pools above make `greedy` strictly suboptimal on 15.1% of
 instances, but they are built from short random strings over a three-letter
 alphabet and so are far denser in prefix relations than a real candidate pool;
 that figure does not transfer. Measured on actual Qwen3 pools, `greedy` falls
-short of the optimum on 0.3–2.8% of pools depending on top-k, and by a negligible
+short of the optimum on 0.1–25.6% of pools depending on top-k, and by a negligible
 margin on average. The case for the exact solver rests on the other two axes: it
 is optimal *by construction* rather than empirically close, and its cost grows
-linearly rather than quadratically (`greedy`) or exponentially (`enumerate_cc`).
+linearly rather than quadratically (`greedy`) or exponentially (`enumerate_cc`),
+which makes it the fastest of the three in practice as well (§7.1).
 
 ### 3.2 The conditional skip in Algorithm 1 is not invertible
 
@@ -329,61 +331,65 @@ floor — which every method pays and which should be subtracted before comparin
 
 ## 7. Results
 
-### 7.1 Solver cost
+### 7.1 Solvers, on identical pools
 
-Microseconds per pool, on pools recorded from real English generation runs
-(`scripts/bench_solvers.py`, best of 5 passes):
+All three solvers replayed on the same recorded pools — **17 087 pools** drawn
+from real generation runs across the three languages and five top-k settings
+(`scripts/compare_solvers.py`, plus `scripts/bench_solvers.py` for timings).
+Because every solver sees the identical pools, a difference is the solver's and
+not the sampled text's.
 
-| top-k | pools | with a conflict | `exact` | `exact_trie` | `greedy` |
-|---|---|---|---|---|---|
-| 8 | 531 | 42.9% | **4.5** | 49.9 | 29.5 |
-| 16 | 687 | 63.3% | **7.4** | 71.9 | 61.5 |
-| 32 | 458 | 79.0% | **18.8** | 179.1 | 256.7 |
-| 64 | 475 | 84.8% | **36.8** | 343.1 | 854.7 |
-| 128 | 447 | 86.1% | **71.4** | 660.6 | 2 985.5 |
+| lang | top-k | pools | `exact` µs | `greedy` µs | `enumerate` µs | `greedy` slower | `enumerate` slower | `greedy` loses on | `enumerate` infeasible |
+|---|---|---|---|---|---|---|---|---|---|
+| en | 8 | 1554 | **5.0** | 24.3 | 27.7 | 4.8× | 5.5× | 5 (0.3%) | 0 |
+| en | 16 | 1872 | **6.9** | 46.8 | 2 606 | 6.7× | 376× | 10 (0.5%) | 0 |
+| en | 32 | 963 | **20.1** | 253.5 | 82 082 | 12.6× | 4 092× | 27 (2.8%) | 41 (4.3%) |
+| en | 64 | 934 | **38.8** | 865.1 | 87 181 | 22.3× | 2 247× | 89 (9.5%) | 101 (10.8%) |
+| en | 128 | 907 | **75.9** | 2 937 | 285 850 | 38.7× | 3 764× | 232 (25.6%) | 222 (24.5%) |
+| zh | 8 | 1083 | **6.3** | 29.5 | 33.5 | 4.7× | 5.3× | 1 (0.1%) | 0 |
+| zh | 16 | 892 | **11.7** | 82.9 | 995.9 | 7.1× | 85× | 11 (1.2%) | 0 |
+| zh | 32 | 911 | **21.0** | 256.3 | 117 626 | 12.2× | 5 611× | 23 (2.5%) | 10 (1.1%) |
+| zh | 64 | 907 | **40.1** | 885.9 | 117 759 | 22.1× | 2 938× | 40 (4.4%) | 22 (2.4%) |
+| zh | 128 | 824 | **77.9** | 3 117 | 372 775 | 40.0× | 4 788× | 53 (6.4%) | 60 (7.3%) |
+| ja | 8 | 1431 | **6.5** | 30.8 | 35.8 | 4.7× | 5.5× | 10 (0.7%) | 0 |
+| ja | 16 | 1276 | **12.3** | 86.2 | 160.1 | 7.0× | 13× | 19 (1.5%) | 0 |
+| ja | 32 | 1228 | **21.2** | 258.2 | 46 624 | 12.2× | 2 202× | 40 (3.3%) | 0 |
+| ja | 64 | 1115 | **43.3** | 952.0 | 110 385 | 22.0× | 2 549× | 105 (9.4%) | 17 (1.5%) |
+| ja | 128 | 1190 | **83.3** | 3 256 | 431 293 | 39.1× | 5 178× | 195 (16.4%) | 85 (7.1%) |
 
-- **`exact` is faster than `greedy` at every pool size** — 6.6× at top-8, rising
-  to **41.8× at top-128**.
-- **The measured scaling matches the analysis.** Over a 16× increase in pool size
-  `exact` grows 15.9× (linear) while `greedy` grows 101× (quadratic): its O(k²)
-  adjacency construction dominates well before top-128.
-- Dropping the explicit trie is worth **9–11×** across the whole range (§3.1).
+**Optimality holds on real data.** `enumerate_cc` searches every subset of every
+connected component, so where it runs it is optimal by definition. It agrees with
+`exact` on **every one of the 16 529 pools it could solve** — all fifteen cells,
+no disagreement in weight and none in membership. The forest-antichain argument
+of §3.1 is not only a proof but a checked one.
 
-### 7.2 Solver quality, on identical pools
+**`exact` is faster than `greedy` everywhere, and the gap widens with top-k** —
+4.7× at top-8 rising to 40× at top-128, consistently across all three languages.
+The measured scaling is what the analysis predicts: over a 16× increase in pool
+size `exact` grows 12–15× (linear) while `greedy` grows 106–121× (quadratic),
+its O(k²) adjacency construction taking over well before top-128.
 
-Every solver replayed on the same recorded English pools (Qwen3-0.6B, chat mode,
-12 FLORES prompts per cell). `exact` and `greedy` solve every pool, so their
-means are directly paired; `enumerate_cc` gives up on the largest components.
-(Timings here are from an earlier build and are superseded by §7.1; what this
-table establishes is *quality* and *feasibility*.)
+**The enumeration baseline is infeasible, not merely slow.** It is 5× to 5 600×
+slower than `exact`, and it fails outright on **558 of 17 087 pools (3.3%)** —
+concentrated where pools are large, reaching **24.5% of English pools at
+top-128**, where a single connected component can span most of the pool. The
+paper's claim that enumeration "may still be a fast way in small-scale connected
+components" reflects testing only Chinese CPM.
 
-| top-k | pools | `exact` η | `greedy` Δη | `greedy` loses on | `enumerate` infeasible | `enumerate` µs/pool |
-|---|---|---|---|---|---|---|
-| 8 | 1554 | 0.990457 | −2.7 × 10⁻⁶ % | 5 (0.3%) | 0 | 29.5 |
-| 16 | 1872 | 0.990525 | −9.5 × 10⁻⁶ % | 10 (0.5%) | 0 | 2 638 |
-| 32 | 963 | 0.983814 | −1.4 × 10⁻³ % | 27 (2.8%) | 41 (4.3%) | 82 481 |
+**`greedy`'s suboptimality is rare and cheap at small top-k, and neither at
+large.** It loses on 0.1–0.7% of pools at top-8 but on 6.4–25.6% at top-128. Its
+*aggregate* η cost stays tiny throughout — between −0.00001% and −0.015% — so the
+case for `exact` is not that it buys much η on average. It is that `exact` is
+optimal by construction rather than usually-close, and is the cheaper of the two
+at every size measured.
 
-- **`exact` agrees with `enumerate_cc` on every pool the latter solves**, which
-  confirms optimality on real data and not only on the synthetic instances of
-  §3.1.
-- **`greedy`'s shortfall is real but small, and grows with top-k** — from 0.3% to
-  2.8% of pools between top-8 and top-32. Its *average* η cost is negligible. The
-  argument for `exact` is that it is optimal by construction, and cheaper (§7.1).
-- **The enumeration baseline is not merely slow — it is infeasible.** Its cost
-  rises 2 800× from top-8 to top-32, and at top-32 it hits connected components
-  of up to **31 nodes** (2³¹ subsets) on 4.3% of pools. The paper's claim that
-  enumeration "may still be a fast way in small-scale connected components"
-  reflects testing only Chinese CPM; English byte-level BPE pools can be almost
-  entirely one component.
+> A caveat worth carrying into any write-up: an *unrestricted* mean η flatters
+> `enumerate_cc`, because it averages only over the pools it could solve and
+> silently drops the hardest ones. `compare_solvers.py` therefore reports means
+> restricted to each solver's own solved set alongside `exact` on that same
+> subset. Compared that way, `enumerate_cc` never beats `exact` on any pool.
 
-> A caveat worth carrying into any write-up: `enumerate_cc`'s *unrestricted* mean
-> η looks **higher** than `exact`'s at top-32, because it averages only over the
-> pools it could solve and silently drops the 41 hardest. `compare_solvers.py`
-> therefore reports means restricted to each solver's own solved set alongside
-> `exact` on that same subset. Compared properly, `enumerate_cc` never beats
-> `exact` on any pool.
-
-### 7.3 End to end
+### 7.2 End to end
 
 The full matrix (3 languages × 4 methods × top-k ∈ {8, 32, 128}) is produced by
 `scripts/run_experiments.py`; see `runs/`. Extraction is verified on every
