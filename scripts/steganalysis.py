@@ -20,6 +20,7 @@ otherwise the detector can memorise the topic rather than learn the artefact.
 
   python scripts/steganalysis.py --corpus runs/corpus.jsonl --detector ngram
   python scripts/steganalysis.py --corpus runs/corpus.jsonl --detector xlmr --epochs 3
+  python scripts/steganalysis.py --corpus runs/corpus.jsonl --detector xlmr --control
 """
 
 from __future__ import annotations
@@ -31,8 +32,30 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def load(corpus):
+def as_control(rows, a="en", b="zh"):
+    """Relabel the same texts by language, to check the detector can detect.
+
+    A detector scoring at chance is evidence of no signal only if it can be shown
+    to find a signal that *is* there.  Telling two languages apart is trivial, so
+    any detector that fails this has a training problem -- and a fine-tuned
+    encoder returning exactly 0.5000 has collapsed to one class, which looks
+    identical to a null result until this control separates the two.
+    """
+    out = []
+    for r in rows:
+        if r["method"] != "none":       # one text per prompt, not three
+            continue
+        if r["lang"] == a:
+            out.append({**r, "lang": "ctl", "method": "exact", "label": 1})
+        elif r["lang"] == b:
+            out.append({**r, "lang": "ctl", "method": "none", "label": 0})
+    return out
+
+
+def load(corpus, control=False):
     rows = [json.loads(l) for l in Path(corpus).open(encoding="utf-8")]
+    if control:
+        rows = as_control(rows)
     cells = defaultdict(list)
     for r in rows:
         # One binary task per (lang, topk, stego method): that method vs `none`.
@@ -135,9 +158,13 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="")
+    ap.add_argument("--control", action="store_true",
+                    help="sanity check: relabel the same texts by language instead")
     args = ap.parse_args()
 
-    cells, covers = load(args.corpus)
+    cells, covers = load(args.corpus, control=args.control)
+    if args.control:
+        print("positive control: English vs Chinese, not stego vs cover")
     results = []
     print(f"{'lang':4} {'topk':>4} {'method':10} {'n':>6} {'val':>7} {'test':>7}")
     print("-" * 46)
