@@ -9,6 +9,13 @@ The original proof-of-concept, targeting CPM in Chinese, is preserved unmodified
 under [`legacy/`](legacy/). The current implementation targets **Qwen3-0.6B** in
 **English, Chinese and Japanese**.
 
+> The name `legacy` is used twice, for two different things. The **`legacy/`
+> directory** on this branch holds the three original source files, so they can
+> be read beside the code that replaced them and line-referenced from §3 and §4.
+> The **`legacy` branch** is the untouched snapshot of the repository as it stood
+> when the letter was published — vocabulary files and all — for anyone who wants
+> to reproduce the paper rather than this rework.
+
 ---
 
 ## 1. The problem
@@ -522,15 +529,16 @@ legacy/                       the original CPM implementation, unmodified
 ## 9. Citation
 
 ```bibtex
-@article{yan2023secure,
-  title   = {A Secure and Disambiguating Approach for Generative Linguistic Steganography},
-  author  = {Yan, Ruiyi and Yang, Yating and Song, Tian},
-  journal = {IEEE Signal Processing Letters},
-  volume  = {30},
-  pages   = {1047--1051},
-  year    = {2023},
-  doi     = {10.1109/LSP.2023.3302749}
-}
+@ARTICLE{10215094,
+  author={Yan, Ruiyi and Yang, Yating and Song, Tian},
+  journal={IEEE Signal Processing Letters}, 
+  title={A Secure and Disambiguating Approach for Generative Linguistic Steganography}, 
+  year={2023},
+  volume={30},
+  number={},
+  pages={1047-1051},
+  keywords={Security;Codes;Steganography;Receivers;Ice;Probability distribution;Linguistics;Linguistic steganography;maximum weight independent set;segmentation ambiguity;disambiguation},
+  doi={10.1109/LSP.2023.3302749}}
 ```
 
 The arithmetic coder derives from
